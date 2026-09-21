@@ -481,7 +481,17 @@ export class S3Client {
     key: string,
   ): Promise<{ size: number; modified: string; etag: string } | null> {
     const url = this.getUrl(key)
-    const resp = await this.fetch("HEAD", url)
+    let resp = await this.fetch("HEAD", url)
+
+    // 阿里云 OSS 会偶发对 HEAD 单独返回 403（响应体是 OSS 错误 XML，
+    // 带 x-oss-ec=0002-00000429），而紧接着对同一 URL 发 GET 立即成功 ——
+    // 凭据、签名、对象都没问题，属于瞬时性拒绝。不重试的话，/d 与
+    // /api/fs/get 会随机 500，外部表现就是「列表里点下载偶尔失败」。
+    if (!resp.ok && resp.status !== 404) {
+      await new Promise((r) => setTimeout(r, 250))
+      resp = await this.fetch("HEAD", url)
+    }
+
     if (resp.status === 404) {
       return null
     }

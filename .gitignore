@@ -58,6 +58,10 @@ dist-server/
 package-lock.json
 yarn.lock
 
+# local ops scripts (machine-specific: scans Cloudflare preferred IPs for this
+# deployment's own domain; not part of the project)
+scripts/cf-ip-scan.py
+
 # misc
 .cache/
 .parcel-cache/

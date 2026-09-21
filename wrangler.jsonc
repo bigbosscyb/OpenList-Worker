@@ -36,6 +36,31 @@
   },
 
   // ===========================================================================
+  // 自定义域名（Zone Route + 自管 DNS，用于「Cloudflare 优选 IP」）
+  //
+  // 为什么不用 custom_domain: true：
+  //   该模式下 DNS 由 Cloudflare 代管，记录是一条 AAAA 100::（占位），
+  //   落到哪个边缘节点完全由 anycast 决定。实测大陆访问被甩到 MIA/LAX，
+  //   TLS 握手中位 0.56s、TTFB 3.0s（8 次里还有 2 次直接超时）。
+  //   改用下面的 zone route + 自管一条 A 记录指向优选 IP 后稳定落 HKG。
+  //
+  // 因此 DNS 侧需要（不在本文件管辖范围内，改 DNS 时别忘）：
+  //   pan.939826.xyz  A  172.66.0.1  【必须 DNS only / 灰云】
+  //     —— 橙云时 Cloudflare 会用自己的 anycast IP 覆盖掉你填的值，优选 IP
+  //        就白填了。灰云下流量照样落到 CF 边缘（CF 的 IP 本身就是 anycast），
+  //        Worker route 按 Host 匹配，证书走 Universal SSL。
+  //   且不能残留自定义域名留下的 AAAA 100:: 记录 —— IPv6 优先，客户端会
+  //   先去连那个不可达地址。
+  //
+  // 前提：939826.xyz 的 NS 已托管在本 Cloudflare 账号下。
+  // 注意：优选 IP 会随时间失效，届时只需换 DNS 里 A 记录的值，本文件不用动；
+  //       重扫候选 IP 用 scripts/cf-ip-scan.py（该脚本未入库，见 .gitignore）。
+  // ===========================================================================
+  "routes": [
+    { "pattern": "pan.939826.xyz/*", "zone_name": "939826.xyz" }
+  ],
+
+  // ===========================================================================
   // 普通环境变量（非敏感）
   // 注意：vars 会在每次 wrangler deploy 时被本文件覆盖（Secrets 不会）。
   // ===========================================================================
@@ -46,7 +71,7 @@
     //   map（默认）- 整对象序列化为单个 JSON 键值，适合 KV/Blob
     //   key        - 分 key 存储，每实体一条记录（如 users_1）
     //   sql        - 关系表格式，与 Go 后端一致（适用于 D1/MySQL）
-    "DB_FORMAT": "map",
+    "DB_FORMAT": "sql",
 
     // 数据库驱动：
     //   auto（默认）- 自动检测，顺序 mysql → d1 → kv → cfkv → blob → do
@@ -57,9 +82,11 @@
     //   do         - Cloudflare Durable Objects（需下方 durable_objects）
     //   mysql      - 外部 MySQL（需 MYSQL_URLS 或 MYSQL_HOST 等，仅 Node 运行时）
     // 说明：mysql 仅在配置了连接信息时才参与 auto 探测，避免无谓的 TCP 建连。
-    "DB_DRIVER": "auto",
+    "DB_DRIVER": "d1",
 
-    // 敏感字段落盘算法（默认 none：不加密；与 DB_DRIVER/DB_FORMAT 正交）：
+    // 敏感字段落盘算法（与 DB_DRIVER/DB_FORMAT 正交）：
+    //   ⚠️ 本部署已启用 aes-256-gcm —— 加密密钥由 JWT_SECRET 经 HKDF 派生，
+    //      密钥备份在 .dev.vars（已被 gitignore），丢失将无法解密网盘凭据。
     //   none（默认）              - 不加密，敏感字段明文落盘
     //   aes-256-gcm              - HKDF 派生 AES-256-GCM 密钥（enc:v2:，推荐）
     //   aes-256-gcm-pbkdf2       - AES-256-GCM + PBKDF2-SHA256(10 万次) 逐字段派生
@@ -73,7 +100,7 @@
     //       因此把该项改回 none 不会导致既有数据不可读（下次保存自动转为明文）。
     // 注意：该项与 JWT 密钥无关 —— DB_CIPHER=none 时，未配置 JWT_SECRET 仍会
     //       自动生成并持久化共享密钥（JWT 签名需要）。
-    "DB_CIPHER": "none",
+    "DB_CIPHER": "aes-256-gcm",
 
     // ── 安全鉴权（推荐以 Secret 类型配置，见 .dev.vars.example）──────────
     //
@@ -145,13 +172,15 @@
   //
   //  "kv_namespaces": [{ "binding": "KV" }],
   //
-  // ▶ 方案 B：D1（关系型，可与 Go 后端共享库；DB_FORMAT 建议改为 "sql"）
-  //   控制台：Workers & Pages → D1 → 创建数据库 → 绑定到 Worker，变量名填 DB
-  //   省略 database_id 时，wrangler >= 4.45.0 会自动创建同名库并回写
+  // ▶ 方案 B：D1 —— 【本部署已启用】
+  //   绑定名必须是 DB（与 DB_DRIVER=d1 对应）。
+  //   这里省略 database_id：wrangler >= 4.45.0 会自动创建同名库并回写 id。
+  //   若自动预配失败，改手动：npx wrangler d1 create openlist，
+  //   再把输出里的 database_id 填进下面的对象。
   //
-  // "d1_databases": [
-  //   { "binding": "DB", "database_name": "openlist", "database_id": "" }
-  // ],
+  "d1_databases": [
+    { "binding": "DB", "database_name": "openlist" }
+  ],
   //
   // ▶ 方案 C：Durable Objects（内置 SQLite，强一致；DB_FORMAT 建议改为 "sql"）
   //   注意：DO 需要 migrations，且删除成本高，适合单租户部署。
