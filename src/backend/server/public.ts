@@ -340,6 +340,16 @@ publicRouter.get("/env_check", async (c) => {
 })
 
 publicRouter.get("/settings", async (c) => {
+  // 边缘缓存：/api/public/settings 每次都查 D1，TTFB 1-2s。用 Cloudflare Cache API
+  // 在边缘缓存 5 分钟，二次请求直接从边缘返回（< 50ms），大幅减少首屏等待。
+  // 管理员修改设置后最多 5 分钟生效（可接受）。
+  const cacheKey = new Request(c.req.url, { method: "GET" })
+  const cache = typeof caches !== "undefined" ? caches.default : null
+  if (cache) {
+    const cached = await cache.match(cacheKey)
+    if (cached) return cached
+  }
+
   const db = await getDb(c.env)
 
   // Default settings aligned with Go backend InitialSettings()
@@ -488,11 +498,22 @@ publicRouter.get("/settings", async (c) => {
     settingsObj.allow_guest = "true"
   }
 
-  return c.json({
+  const response = c.json({
     code: 200,
     message: "success",
     data: settingsObj,
   })
+
+  // 写入边缘缓存（5 分钟 TTL），后续请求命中时跳过 D1 查询
+  if (cache) {
+    const res = await response
+    const cached = new Response(res.body, res)
+    cached.headers.set("Cache-Control", "public, max-age=300")
+    c.executionCtx?.waitUntil?.(cache.put(cacheKey, cached.clone()))
+    return cached
+  }
+
+  return response
 })
 
 publicRouter.get("/archive_extensions", (c) => {

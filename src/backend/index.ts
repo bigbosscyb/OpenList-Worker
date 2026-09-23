@@ -194,6 +194,15 @@ app.all("*", async (c) => {
         headers.set("Cache-Control", "no-cache, must-revalidate")
         return new Response(res.body, { status: res.status, headers })
       }
+      // 带 content-hash 的静态资源（JS/CSS/字体等）：文件名含 hash，内容不变，
+      // 可安全设置浏览器长期缓存 + immutable，避免每次访问都重新下载 1.4MB 的 JS。
+      // Cloudflare Assets 默认 max-age=0 must-revalidate，二次访问仍要发请求验证，
+      // 此处覆盖为一年 immutable，浏览器直接读本地缓存，首屏提速显著。
+      if (/\/assets\/.*-[a-zA-Z0-9]{6,}\.\w+$/.test(url.pathname)) {
+        const headers = new Headers(res.headers)
+        headers.set("Cache-Control", "public, max-age=31536000, immutable")
+        return new Response(res.body, { status: res.status, headers })
+      }
       return res
     }
     // SPA fallback: return index.html for non-asset routes (e.g. /login, /manage)
