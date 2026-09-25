@@ -24,6 +24,10 @@
 // =============================================================================
 {
   "name": "openlist-tsworkers",
+  // 账号下有多个 account（本账号 + 一个 "free"），不写死的话 wrangler 在
+  // 非交互环境会报 "More than one account available"。写死后 `wrangler deploy`
+  // 不再需要 CLOUDFLARE_ACCOUNT_ID 环境变量前缀。
+  "account_id": "b23c9c364b9fb62a947c08d221ac6ab2",
   "main": "src/backend/worker.ts",
   "compatibility_date": "2026-08-04",
   "compatibility_flags": ["nodejs_compat"],
